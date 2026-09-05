@@ -100,6 +100,16 @@ python -m venv .venv
 
 或直接使用脚本：`build.ps1`（Windows）、`build.sh`（macOS/Linux）。
 
+### Release 自动发布
+
+仓库已配置 GitHub Actions（[.github/workflows/release.yml](.github/workflows/release.yml)），照搬 blog-starter 的发布模式：
+
+- **打 tag 自动发布**：`git tag v1.0.0 && git push origin v1.0.0` → 自动在三个平台跑测试、构建、自检，并把安装包挂到 Releases 页
+- **手动验证构建**：Actions 页选「Desktop Release」→ Run workflow（只出构建产物，不发布）
+- 产物：`DesktopClock-windows.exe`、`DesktopClock-macos.zip`（未签名）、`DesktopClock-linux.tar.gz`
+
+构建依赖见 `requirements.txt`（PySide6-Essentials / pyinstaller / pytest）。
+
 图标由 `scripts/gen_icon.py` 程序化生成（16/32/48/256 四尺寸，纯 Python 装配 ICO，无额外依赖），想换样式改脚本里的绘制参数后重跑即可。
 
 ## 运行测试

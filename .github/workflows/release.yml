@@ -1,0 +1,136 @@
+# 桌面时钟三平台发布工作流：打 tag（v*）自动构建 Win/Mac/Linux 包并挂上 Release；
+# workflow_dispatch 手动触发只出构建产物、不发布，用于验证。
+# 说明：macOS 包未签名（无 Apple 开发者证书）；Linux 直接发单文件二进制（非 AppImage）。
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: macos-latest
+            target: macos
+          - os: ubuntu-latest
+            target: linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Create venv and install dependencies
+        shell: bash
+        run: |
+          python -m venv .venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "PY=.venv/Scripts/python.exe" >> "$GITHUB_ENV"
+          else
+            echo "PY=.venv/bin/python" >> "$GITHUB_ENV"
+          fi
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install -r requirements.txt
+
+      - name: Run tests
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          "$PY" -m pytest tests -q
+
+      - name: Build (Windows, single-file exe)
+        if: matrix.target == 'windows'
+        shell: bash
+        run: >
+          .venv/Scripts/pyinstaller.exe --onefile --windowed --name DesktopClock
+          --icon assets/icon.ico --add-data "assets;assets" main.py
+
+      - name: Build (macOS, .app bundle)
+        if: matrix.target == 'macos'
+        shell: bash
+        run: >
+          .venv/bin/pyinstaller --onedir --windowed --name DesktopClock
+          --icon assets/icon.ico --add-data "assets:assets" main.py
+
+      - name: Build (Linux, single-file binary)
+        if: matrix.target == 'linux'
+        shell: bash
+        run: >
+          .venv/bin/pyinstaller --onefile --windowed --name DesktopClock
+          --icon assets/icon.ico --add-data "assets:assets" main.py
+
+      - name: Selftest build
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./dist/DesktopClock.exe --selftest
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ./dist/DesktopClock.app/Contents/MacOS/DesktopClock --selftest
+          else
+            ./dist/DesktopClock --selftest
+          fi
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mv DesktopClock.exe "DesktopClock-${{ matrix.target }}.exe"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            zip -qry "DesktopClock-${{ matrix.target }}.zip" DesktopClock.app
+          else
+            chmod +x DesktopClock
+            tar czf "DesktopClock-${{ matrix.target }}.tar.gz" DesktopClock
+          fi
+          ls -la
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/DesktopClock-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: |
+            桌面时钟安装包（Windows / macOS / Linux）。
+
+            - **Windows**：未签名，SmartScreen 提示时选「仍要运行」即可；解压即用，双击 `DesktopClock-windows.exe`
+            - **macOS 包未签名**：解压后把 `DesktopClock.app` 拖进「应用程序」，首次打开请右键 → 打开，或终端执行 `xattr -cr ~/Applications/DesktopClock.app`
+            - **Linux**：`tar xzf DesktopClock-linux.tar.gz && chmod +x DesktopClock && ./DesktopClock`（单文件二进制，不是 AppImage，无需 libfuse2）
+            - 源码运行、构建与自定义图标方法见 [README](https://github.com/${{ github.repository }}#readme)
