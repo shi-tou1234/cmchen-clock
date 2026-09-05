@@ -1,4 +1,4 @@
-# 构建与开发依赖（运行只需 PySide6-Essentials）
-PySide6-Essentials>=6.11
+# 构建与开发依赖（运行只需 pyside6-essentials，即 Qt 官方 PySide6 核心发行包）
+pyside6-essentials>=6.11
 pyinstaller>=6.22
 pytest>=9.0
