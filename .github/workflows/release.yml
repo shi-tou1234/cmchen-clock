@@ -42,10 +42,12 @@ jobs:
         run: |
           python -m venv .venv
           if [ "$RUNNER_OS" = "Windows" ]; then
-            echo "PY=.venv/Scripts/python.exe" >> "$GITHUB_ENV"
+            PY=".venv/Scripts/python.exe"
           else
-            echo "PY=.venv/bin/python" >> "$GITHUB_ENV"
+            PY=".venv/bin/python"
           fi
+          # GITHUB_ENV 只对后续步骤生效，本步骤内必须用局部变量
+          echo "PY=$PY" >> "$GITHUB_ENV"
           "$PY" -m pip install --upgrade pip
           "$PY" -m pip install -r requirements.txt
 
