@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import autostart
 import fonts
 import settings as settings_mod
 from clock_core import format_date, format_time
@@ -163,6 +164,10 @@ class SettingsDialog(QDialog):
         self.lock_check = QCheckBox("锁定位置（禁止拖动）")
         self.lock_check.setChecked(self.cfg["pos_locked"])
 
+        self.autostart_check = QCheckBox("开机自启动（登录后自动运行）")
+        self.autostart_check.setChecked(self.cfg["autostart"])
+        self.autostart_check.setEnabled(autostart.is_supported())
+
         self.opacity_slider = QSlider(Qt.Horizontal)
         self.opacity_slider.setRange(10, 100)
         self.opacity_slider.setValue(round(self.cfg["opacity"] * 100))
@@ -173,6 +178,7 @@ class SettingsDialog(QDialog):
         self.form = QFormLayout()
         self.form.addRow("显示方式", self.behavior_combo)
         self.form.addRow("", self.lock_check)
+        self.form.addRow("", self.autostart_check)
         self.form.addRow("字体", self.font_combo)
         self.form.addRow("", self.font_file_btn)
         self.form.addRow("字号", self.size_spin)
@@ -262,6 +268,7 @@ class SettingsDialog(QDialog):
         self.cfg["show_seconds"] = self.seconds_check.isChecked()
         self.cfg["hour24"] = self.h24_check.isChecked()
         self.cfg["pos_locked"] = self.lock_check.isChecked()
+        self.cfg["autostart"] = self.autostart_check.isChecked()
         self.cfg["opacity"] = self.opacity_slider.value() / 100
         if not self._loaded_file_family:
             self.cfg["font_file"] = ""
@@ -344,6 +351,12 @@ class ClockWindow(QWidget):
         settings_mod.save_settings(self.cfg)
         self._refresh_tray_menu()
 
+    def _toggle_autostart(self):
+        desired = not self.cfg["autostart"]
+        self.cfg["autostart"] = autostart.sync(desired)
+        settings_mod.save_settings(self.cfg)
+        self._refresh_tray_menu()
+
     def _update_text(self):
         now = QTime.currentTime()
         self.time_label.setText(format_time(
@@ -410,6 +423,11 @@ class ClockWindow(QWidget):
         lock_action.setCheckable(True)
         lock_action.setChecked(self.cfg["pos_locked"])
         lock_action.triggered.connect(self._toggle_lock)
+        if autostart.is_supported():
+            autostart_action = menu.addAction("开机自启动")
+            autostart_action.setCheckable(True)
+            autostart_action.setChecked(self.cfg["autostart"])
+            autostart_action.triggered.connect(self._toggle_autostart)
         menu.addSeparator()
         show_action = menu.addAction("隐藏时钟" if self.isVisible() else "显示时钟")
         show_action.triggered.connect(self._toggle_visibility)
@@ -465,6 +483,7 @@ class ClockWindow(QWidget):
             return
         self.cfg = settings_mod.merged_settings(dialog.apply())
         settings_mod.save_settings(self.cfg)
+        autostart.sync(self.cfg["autostart"])
         pos = self.pos()
         was_visible = self.isVisible()
         self._apply_settings()
@@ -522,7 +541,11 @@ def main():
     has_tray = QSystemTrayIcon.isSystemTrayAvailable()
     # 托盘在位时：隐藏时钟不等于退出程序（从托盘唤回或退出）
     app.setQuitOnLastWindowClosed(not has_tray)
-    window = ClockWindow(settings_mod.load_settings(), enable_tray=has_tray)
+    cfg = settings_mod.load_settings()
+    if cfg["autostart"]:
+        # 每次启动校正自启动命令行（python/脚本路径变化后自动纠正）
+        cfg["autostart"] = autostart.sync(True)
+    window = ClockWindow(cfg, enable_tray=has_tray)
     window.show()
     return app.exec()
 

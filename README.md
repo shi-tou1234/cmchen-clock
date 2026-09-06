@@ -19,6 +19,7 @@
 - **字号 8–200、任意颜色、不透明度 10%–100%**
 - **显示日期、显示秒、12/24 小时制**均可开关
 - **系统托盘常驻**：左键单击隐藏/唤回时钟，右键菜单可完成全部操作
+- **开机自启动**：设置面板或右键菜单勾选即可（Windows 写用户注册表 Run 键 / macOS LaunchAgents / Linux XDG Autostart，均为当前用户作用域，可随时取消）
 - **设置与窗口位置自动记住**（存于 `~/.desktop-clock/settings.json`）
 - 每秒整点对齐刷新，几乎不占 CPU；打包后单文件约 36 MB
 
@@ -42,6 +43,7 @@ python main.py
 | 打开设置 | 时钟上右键 → **设置…** |
 | 切换显示方式 | 右键 → **显示方式** 子菜单，或托盘右键菜单 |
 | 锁定/解锁位置 | 右键 → **锁定位置** |
+| 开机自启动 | 右键 → **开机自启动**（或设置面板勾选） |
 | 临时隐藏/唤回 | 左键单击托盘图标，或菜单 → **隐藏时钟** |
 | 退出 | 右键/托盘菜单 → **退出** |
 
@@ -53,15 +55,17 @@ python main.py
 - **字号**：8–200
 - **颜色**：任意颜色；预览区即时显示效果
 - **显示日期 / 显示秒 / 24 小时制**：即时生效
+- **开机自启动**：登录后自动运行（等价于右键菜单里的勾选项）
 - **不透明度**：10%–100%
 
 点「确定」立即生效并保存。设置文件在 `~/.desktop-clock/settings.json`，删掉它即可恢复全部默认值。
 
 ### 开机自启（可选）
 
-- **Windows**：`Win+R` 输入 `shell:startup`，把 `DesktopClock.exe` 的快捷方式放进去
-- **macOS**：系统设置 → 通用 → 登录项
-- **Linux**：桌面环境的「自启动」设置中添加
+在时钟上右键勾选 **开机自启动**（或设置面板勾选）即可，再次点击取消。
+实现方式：Windows 用户注册表 Run 键 / macOS `~/Library/LaunchAgents` / Linux XDG Autostart，只影响当前用户，删除设置项即等于关闭。
+
+手动方式（备用）：Windows `Win+R` → `shell:startup` 放入快捷方式；macOS 系统设置 → 登录项；Linux 桌面环境自启动设置。
 
 ## 运行环境
 
@@ -119,7 +123,7 @@ python -m venv .venv
 .venv/bin/python -m pytest tests -q            # macOS / Linux
 ```
 
-53 条测试覆盖时间/日期格式化、设置迁移与安全读写、字体加载、三种显示方式窗口标志、拖动锁、设置面板预览等。
+60 条测试覆盖时间/日期格式化、设置迁移与安全读写、字体加载、三种显示方式窗口标志、拖动锁、开机自启动命令构造、设置面板预览等。
 
 ## 自检
 
@@ -135,8 +139,9 @@ python main.py --selftest
 clock_core.py      时间/日期文本格式化（纯函数）
 settings.py        设置读写（JSON、缺省回退、旧配置迁移、防路径穿越）
 fonts.py           系统字体枚举、字体文件加载
+autostart.py       开机自启动（注册表 Run 键 / LaunchAgents / XDG Autostart）
 main.py            主程序（窗口、三显示方式、托盘、设置面板、selftest）
-tests/             pytest 测试（53 条）
+tests/             pytest 测试（60 条）
 scripts/gen_icon.py        图标生成（QPainter 绘制 + ICO 装配）
 scripts/make_screenshot.py 生成 README 截图
 assets/icon.ico    应用图标（多尺寸）

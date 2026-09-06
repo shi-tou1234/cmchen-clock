@@ -28,6 +28,7 @@ DEFAULTS = {
     "opacity": 0.9,
     "window_behavior": "desktop",  # floating / normal / desktop
     "pos_locked": False,           # 锁定位置：禁止拖动
+    "autostart": False,            # 开机自启动（登录后自动运行）
     "pos_x": None,
     "pos_y": None,
 }
@@ -103,7 +104,7 @@ def merged_settings(raw):
     if size is not None and _FONT_SIZE_MIN <= size <= _FONT_SIZE_MAX:
         result["font_size"] = size
     result["color"] = normalize_color(raw.get("color"), DEFAULTS["color"])
-    for key in ("show_date", "show_seconds", "hour24", "pos_locked"):
+    for key in ("show_date", "show_seconds", "hour24", "pos_locked", "autostart"):
         result[key] = _coerce_bool(raw.get(key), DEFAULTS[key])
     opacity = raw.get("opacity")
     if isinstance(opacity, (int, float)) and not isinstance(opacity, bool):
