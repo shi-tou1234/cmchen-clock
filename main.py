@@ -9,8 +9,10 @@
     normal    普通窗口（任务栏可见）
     desktop   固定在桌面：压在其他窗口下方、锁定拖动、不进任务栏（默认）
 
-桌面模式或勾选「锁定位置」时禁止拖动；系统托盘常驻（显示/隐藏、
-显示方式、锁定位置、设置、退出）。设置持久化到
+屏幕位置：右键/托盘菜单「屏幕位置」九宫格预设即时摆放，设置面板里还可
+输入精确 X/Y 坐标；拖动（非桌面模式且未锁定）可自由摆放。桌面模式或
+勾选「锁定位置」时禁止拖动；系统托盘常驻（显示/隐藏、显示方式、
+屏幕位置、锁定位置、设置、退出）。设置持久化到
 ~/.desktop-clock/settings.json（见 settings.py 的安全设计）。
 """
 
@@ -60,6 +62,27 @@ MODE_FLAGS = {
 }
 
 
+POSITION_MARGIN = 24
+
+# 屏幕位置预设：上/中/下 × 左/中/右 九个锚点。
+POSITION_PRESETS = (
+    "top-left", "top-center", "top-right",
+    "middle-left", "middle-center", "middle-right",
+    "bottom-left", "bottom-center", "bottom-right",
+)
+POSITION_LABELS = {
+    "top-left": "上方靠左",
+    "top-center": "上方居中",
+    "top-right": "上方靠右",
+    "middle-left": "中间靠左",
+    "middle-center": "中间居中",
+    "middle-right": "中间靠右",
+    "bottom-left": "下方靠左",
+    "bottom-center": "下方居中",
+    "bottom-right": "下方靠右",
+}
+
+
 def asset_path(name):
     """资源目录：源码运行=项目内 assets/；exe 内运行=PyInstaller 解包目录。"""
     if hasattr(sys, "_MEIPASS"):
@@ -90,8 +113,30 @@ def resolve_font(cfg):
     return font
 
 
+def preset_point(key, width, height, area):
+    """按预设锚点把 (width, height) 的窗口摆到屏幕可用区 area 上，返回左上角坐标。
+
+    area 用 QRect availableGeometry（不含任务栏/程序坞），边缘留 POSITION_MARGIN。
+    key 形如 "middle-center"：纵向 top/middle/bottom × 横向 left/center/right。
+    """
+    vertical, horizontal = key.split("-", 1)
+    if horizontal == "left":
+        x = area.x() + POSITION_MARGIN
+    elif horizontal == "right":
+        x = area.x() + area.width() - width - POSITION_MARGIN
+    else:
+        x = area.x() + (area.width() - width) // 2
+    if vertical == "top":
+        y = area.y() + POSITION_MARGIN
+    elif vertical == "bottom":
+        y = area.y() + area.height() - height - POSITION_MARGIN
+    else:
+        y = area.y() + (area.height() - height) // 2
+    return x, y
+
+
 class SettingsDialog(QDialog):
-    """设置面板：显示方式、锁定位置、字体、字号、颜色、开关、透明度＋实时预览。"""
+    """设置面板：显示方式、锁定位置、屏幕位置、字体、字号、颜色、开关、透明度＋实时预览。"""
 
     def __init__(self, current, parent=None):
         super().__init__(parent)
@@ -191,6 +236,24 @@ class SettingsDialog(QDialog):
         opacity_row.addWidget(self.opacity_label)
         self.form.addRow("不透明度", opacity_row)
 
+        self.pos_preset_combo = QComboBox()
+        self.pos_preset_combo.addItem("自定义", "")
+        for key in POSITION_PRESETS:
+            self.pos_preset_combo.addItem(POSITION_LABELS[key], key)
+
+        self.pos_x_spin = QSpinBox()
+        self.pos_x_spin.setRange(-20000, 20000)
+        self.pos_y_spin = QSpinBox()
+        self.pos_y_spin.setRange(-20000, 20000)
+        self._load_position_spins()
+        self.pos_preset_combo.currentIndexChanged.connect(self._apply_preset_to_spins)
+
+        pos_row = QHBoxLayout()
+        pos_row.addWidget(self.pos_x_spin)
+        pos_row.addWidget(self.pos_y_spin)
+        self.form.addRow("屏幕位置", self.pos_preset_combo)
+        self.form.addRow("坐标 X / Y", pos_row)
+
         # 任一影响外观的控件变动 → 实时刷新预览
         self.behavior_combo.currentIndexChanged.connect(self._refresh_preview)
         self.font_combo.currentIndexChanged.connect(self._refresh_preview)
@@ -259,6 +322,40 @@ class SettingsDialog(QDialog):
             "hour24": self.h24_check.isChecked(),
         }
 
+    def _target_area(self):
+        """预设定位用的屏幕可用区：取当前窗口所在屏幕，退化为主屏。"""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "screen"):
+            screen = parent.screen()
+            if screen is not None:
+                return screen.availableGeometry()
+        return QApplication.primaryScreen().availableGeometry()
+
+    def _load_position_spins(self):
+        """初始 X/Y：以时钟当前位置为准（拖动后即时同步），无窗口时用已存坐标。"""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "pos"):
+            x, y = parent.pos().x(), parent.pos().y()
+        else:
+            x, y = self.cfg.get("pos_x") or 0, self.cfg.get("pos_y") or 0
+        self.pos_x_spin.setValue(x)
+        self.pos_y_spin.setValue(y)
+
+    def _apply_preset_to_spins(self):
+        """选中预设时按当前屏幕与时钟尺寸算出像素坐标，回填到 X/Y 输入框。"""
+        key = self.pos_preset_combo.currentData()
+        if not key:
+            return
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "screen") and hasattr(parent, "width"):
+            parent.adjustSize()
+            width, height = parent.width(), parent.height()
+        else:
+            width, height = 240, 120
+        x, y = preset_point(key, width, height, self._target_area())
+        self.pos_x_spin.setValue(x)
+        self.pos_y_spin.setValue(y)
+
     def apply(self):
         """把面板当前值写回 cfg 并返回。"""
         self.cfg["window_behavior"] = self.behavior_combo.currentData()
@@ -270,6 +367,8 @@ class SettingsDialog(QDialog):
         self.cfg["pos_locked"] = self.lock_check.isChecked()
         self.cfg["autostart"] = self.autostart_check.isChecked()
         self.cfg["opacity"] = self.opacity_slider.value() / 100
+        self.cfg["pos_x"] = self.pos_x_spin.value()
+        self.cfg["pos_y"] = self.pos_y_spin.value()
         if not self._loaded_file_family:
             self.cfg["font_file"] = ""
         return self.cfg
@@ -346,6 +445,15 @@ class ClockWindow(QWidget):
             self.move(pos)
         self.adjustSize()
 
+    def _apply_preset(self, key):
+        """把时钟挪到预设屏幕位置并立即保存（主动摆放，与锁定/桌面模式无关）。"""
+        self.adjustSize()
+        screen = self.screen() or QApplication.primaryScreen()
+        x, y = preset_point(key, self.width(), self.height(), screen.availableGeometry())
+        self.cfg["pos_x"], self.cfg["pos_y"] = x, y
+        self.move(x, y)
+        settings_mod.save_settings(self.cfg)
+
     def _toggle_lock(self):
         self.cfg["pos_locked"] = not self.cfg["pos_locked"]
         settings_mod.save_settings(self.cfg)
@@ -418,6 +526,10 @@ class ClockWindow(QWidget):
             act.setCheckable(True)
             act.setChecked(self.cfg["window_behavior"] == mode)
             act.triggered.connect(lambda checked=False, m=mode: self._set_behavior(m))
+        pos_menu = menu.addMenu("屏幕位置")
+        for key in POSITION_PRESETS:
+            act = pos_menu.addAction(POSITION_LABELS[key])
+            act.triggered.connect(lambda checked=False, k=key: self._apply_preset(k))
         menu.addSeparator()
         lock_action = menu.addAction("锁定位置")
         lock_action.setCheckable(True)
@@ -489,6 +601,9 @@ class ClockWindow(QWidget):
         self._apply_settings()
         if was_visible:
             self.show()
+        if self.cfg.get("pos_x") is not None and self.cfg.get("pos_y") is not None:
+            self.move(self.cfg["pos_x"], self.cfg["pos_y"])
+        else:
             self.move(pos)
         self.adjustSize()
 

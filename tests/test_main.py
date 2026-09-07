@@ -1,6 +1,14 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 
-from main import ClockWindow, MODE_FLAGS, SettingsDialog
+import settings as settings_mod
+from main import (
+    POSITION_LABELS,
+    POSITION_PRESETS,
+    ClockWindow,
+    MODE_FLAGS,
+    SettingsDialog,
+    preset_point,
+)
 from settings import merged_settings
 
 
@@ -86,3 +94,87 @@ class TestSettingsDialogPreview:
         cfg = dialog.apply()
         assert cfg["window_behavior"] == "floating"
         assert cfg["pos_locked"] is True
+
+    def test_apply_collects_position_spins(self, qapp):
+        dialog = SettingsDialog(merged_settings({"pos_x": 100, "pos_y": 200}))
+        assert (dialog.pos_x_spin.value(), dialog.pos_y_spin.value()) == (100, 200)
+        dialog.pos_x_spin.setValue(30)
+        dialog.pos_y_spin.setValue(40)
+        cfg = dialog.apply()
+        assert cfg["pos_x"] == 30
+        assert cfg["pos_y"] == 40
+
+    def test_position_combo_lists_custom_plus_nine_presets(self, qapp):
+        dialog = SettingsDialog(merged_settings({}))
+        assert dialog.pos_preset_combo.count() == 10
+        assert dialog.pos_preset_combo.itemData(0) == ""  # 自定义
+        for i, key in enumerate(POSITION_PRESETS, start=1):
+            assert dialog.pos_preset_combo.itemData(i) == key
+
+    def test_position_combo_fills_spins_from_preset(self, qapp, monkeypatch):
+        dialog = SettingsDialog(merged_settings({}))
+
+        class FakeWindow:
+            def width(self):
+                return 200
+
+            def height(self):
+                return 100
+
+            def screen(self):
+                return None
+
+            def adjustSize(self):
+                pass
+
+        monkeypatch.setattr(dialog, "parent", lambda: FakeWindow())
+        monkeypatch.setattr(dialog, "_target_area", lambda: QRect(0, 0, 1920, 1080))
+        dialog.pos_preset_combo.setCurrentIndex(5)  # middle-center
+        assert (dialog.pos_x_spin.value(), dialog.pos_y_spin.value()) == (860, 490)
+
+
+class TestScreenPresets:
+    AREA = QRect(0, 0, 1920, 1080)
+
+    def test_preset_point_covers_nine_grid_positions(self):
+        # 边距 24；期望坐标=(1920-200-24, ...)=(1696, ...)、(1080-100-24)=956、居中=(860,490)
+        assert preset_point("top-left", 200, 100, self.AREA) == (24, 24)
+        assert preset_point("top-center", 200, 100, self.AREA) == (860, 24)
+        assert preset_point("top-right", 200, 100, self.AREA) == (1696, 24)
+        assert preset_point("middle-left", 200, 100, self.AREA) == (24, 490)
+        assert preset_point("middle-center", 200, 100, self.AREA) == (860, 490)
+        assert preset_point("middle-right", 200, 100, self.AREA) == (1696, 490)
+        assert preset_point("bottom-left", 200, 100, self.AREA) == (24, 956)
+        assert preset_point("bottom-center", 200, 100, self.AREA) == (860, 956)
+        assert preset_point("bottom-right", 200, 100, self.AREA) == (1696, 956)
+
+    def test_presets_cover_nine_grid_positions_with_labels(self):
+        assert len(POSITION_PRESETS) == 9
+        assert len(POSITION_LABELS) == 9
+        for key in POSITION_PRESETS:
+            assert key in POSITION_LABELS
+
+    def test_preset_point_on_secondary_screen_negative_origin(self):
+        area = QRect(1920, 0, 1280, 1024)  # 副屏（主屏右侧）
+        assert preset_point("top-left", 200, 100, area) == (1920 + 24, 24)
+        assert preset_point("bottom-right", 200, 100, area) == (1920 + 1280 - 200 - 24, 1024 - 100 - 24)
+
+    def test_apply_preset_moves_window_and_persists(self, qapp, monkeypatch):
+        window = make_window("normal")
+        saved = {}
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: saved.update(cfg))
+
+        class FakeScreen:
+            def availableGeometry(self):
+                return QRect(0, 0, 1920, 1080)
+
+        monkeypatch.setattr(window, "screen", lambda: FakeScreen())
+        monkeypatch.setattr(window, "adjustSize", lambda: None)  # 固定窗口尺寸
+        # 布局最小尺寸会把 resize 顶回去，按实际尺寸计算期望位置
+        expected = preset_point("bottom-center", window.width(), window.height(), QRect(0, 0, 1920, 1080))
+        window._apply_preset("bottom-center")
+        assert (window.x(), window.y()) == expected
+        assert window.cfg["pos_x"] == expected[0]
+        assert window.cfg["pos_y"] == expected[1]
+        assert saved["pos_x"] == expected[0]
+        assert saved["pos_y"] == expected[1]

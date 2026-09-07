@@ -1,5 +1,11 @@
 # PROGRESS
 
+## 三轮：屏幕位置（2026-09-07）
+- 需求：九宫格预设位置（上方/中间/下方 × 靠左/居中/靠右）+ 自定义随意摆放，完成后提交 GitHub 并发 Release。
+- 实现：main.py 新增 POSITION_PRESETS/POSITION_LABELS 常量与 preset_point() 纯函数（锚点计算，边缘 24px，支持副屏负坐标）；右键/托盘菜单新增「屏幕位置」子菜单即时摆放并保存；设置面板新增「屏幕位置」预设下拉 + 精确 X/Y 坐标输入（确定后生效）；拖动自由摆放保持原样。
+- 验收：67 passed（新增 7 条：锚点网格/副屏/菜单应用持久化/面板坐标回填）；selftest 三模式 SELFTEST_OK_*＋ICON_OK rc=0。
+- 收尾：README 更新；版本 v1.1.0，提交推送 github.com/shi-tou1234/cmchen-clock（领导已授权），打 tag 触发三平台 Release。
+
 ## 二轮收口（2026-09-05 晚）
 - 交付：三种显示方式（floating/normal/desktop，默认 desktop）＋锁定位置＋设置面板实时预览＋托盘常驻＋任务栏存在感＋应用图标（scripts/gen_icon.py 可再生）＋exe 重建。
 - 验收：53 passed skipped=0；selftest 三模式 SELFTEST_OK_*＋ICON_OK rc=0；exe selftest rc=0；gen_icon 回读 (0,1,4) [16,32,48,0]。
