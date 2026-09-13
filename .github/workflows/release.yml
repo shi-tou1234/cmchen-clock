@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -115,7 +115,7 @@ jobs:
           ls -la
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: desktop-${{ matrix.target }}
           path: dist/DesktopClock-${{ matrix.target }}.*
@@ -128,13 +128,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body: |
