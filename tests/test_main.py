@@ -1,5 +1,5 @@
-from PySide6.QtCore import QEvent, QPointF, QRect, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QEvent, QPointF, QPoint, QRect, Qt
+from PySide6.QtGui import QMouseEvent, QMoveEvent
 
 import settings as settings_mod
 from main import (
@@ -351,11 +351,98 @@ class TestScreenFit:
 
     def test_screen_geometry_signal_starts_debounce(self, qapp):
         window = make_window("normal")
+        window._screen_fit_timer.stop()  # 构造期布局 resize 可能已排过核对
         assert not window._screen_fit_timer.isActive()
         screen = qapp.screens()[0]
         screen.geometryChanged.emit(screen.geometry())  # 模拟分辨率变化信号
         assert window._screen_fit_timer.isActive()
         assert window._screen_fit_timer.interval() == SCREEN_FIT_DEBOUNCE_MS
+
+    def test_preset_drift_same_area_self_corrects(self, qapp, monkeypatch):
+        # 报障场景：笔记本屏与外接屏可用区同为 1920×1080，锚点对比发现不了变化，
+        # 但换屏瞬间窗口被系统挪偏/因跨屏 DPI 尺寸变化而失准——必须按预设纠回
+        area = QRect(0, 0, 1920, 1080)
+        window = make_window("normal")
+        w, h = prepare_fit(window, area, monkeypatch)
+        expected = preset_point("middle-center", w, h, area)
+        window.cfg["pos_preset"] = "middle-center"
+        window.cfg["pos_anchor"] = anchor_of(area)  # 锚点没变（旧逻辑据此误判不用动）
+        window.move(expected[0] + 40, expected[1] + 30)  # 模拟被系统挪偏
+        saved = {}
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: saved.update(cfg))
+
+        window._check_screen_fit()
+        assert (window.x(), window.y()) == expected
+        assert (window.cfg["pos_x"], window.cfg["pos_y"]) == expected
+        assert saved["pos_x"] == expected[0]
+
+    def test_preset_adhered_stays_put(self, qapp, monkeypatch):
+        area = QRect(0, 0, 1920, 1080)
+        window = make_window("normal")
+        w, h = prepare_fit(window, area, monkeypatch)
+        expected = preset_point("bottom-right", w, h, area)
+        window.cfg["pos_preset"] = "bottom-right"
+        window.cfg["pos_anchor"] = anchor_of(area)
+        window.move(*expected)
+        saved = {}
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: saved.update(cfg))
+
+        window._check_screen_fit()
+        assert (window.x(), window.y()) == expected
+        assert not saved  # 完全贴合 → 不动不写盘
+
+    def test_reposition_schedules_verification_round(self, qapp, monkeypatch):
+        # 重摆后要再核对一轮：换屏/DPI 常在第一次纠正之后才最终落定
+        window = make_window("normal")
+        old, new = QRect(0, 0, 2560, 1440), QRect(0, 0, 1920, 1080)
+        w, h = prepare_fit(window, new, monkeypatch)
+        window.cfg["pos_preset"] = "top-right"
+        window.cfg["pos_anchor"] = anchor_of(old)
+        window.move(*preset_point("top-right", w, h, old))
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: None)
+        window._screen_fit_timer.stop()
+
+        window._check_screen_fit()
+        assert window._screen_fit_timer.isActive()
+        assert window._fit_chain == 1
+
+    def test_external_move_restores_custom_position(self, qapp, monkeypatch):
+        # 系统把自定义位置的窗口挪走 → 退回已保存意图，并排定核对
+        window = make_window("normal")
+        prepare_fit(window, QRect(0, 0, 1920, 1080), monkeypatch)
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: None)
+        window.cfg["pos_preset"] = ""
+        window.cfg["pos_x"], window.cfg["pos_y"] = 200, 200
+        window.move(640, 480)          # 先挪到别处（程序自己的 move 不算外部）
+        window._screen_fit_timer.stop()
+
+        window.moveEvent(QMoveEvent(QPoint(640, 480), QPoint(999, 999)))
+        assert (window.x(), window.y()) == (200, 200)  # 退回意图位置
+        assert window._screen_fit_timer.isActive()      # 且排了核对
+
+    def test_external_move_with_preset_defers_to_check(self, qapp, monkeypatch):
+        # 有预设时不硬退坐标（该按当前尺寸重算），但必须排定核对
+        window = make_window("normal")
+        prepare_fit(window, QRect(0, 0, 1920, 1080), monkeypatch)
+        monkeypatch.setattr(settings_mod, "save_settings", lambda cfg: None)
+        window.cfg["pos_preset"] = "middle-center"
+        window.cfg["pos_anchor"] = anchor_of(QRect(0, 0, 1920, 1080))
+        window.move(640, 480)
+        window._screen_fit_timer.stop()
+
+        window.moveEvent(QMoveEvent(QPoint(640, 480), QPoint(999, 999)))
+        assert (window.x(), window.y()) == (640, 480)  # 不硬退
+        assert window._screen_fit_timer.isActive()      # 核对会按预设纠偏
+
+    def test_resize_schedules_check(self, qapp):
+        # 字号/DPI 导致的窗口尺寸变化会让靠下/靠右预设失准
+        # （隐藏窗口的 resize 不派发事件，show 后才补发，故先显示）
+        window = make_window("normal")
+        window.show()
+        window._screen_fit_timer.stop()
+        window.resize(500, 220)
+        assert window._screen_fit_timer.isActive()
+        window.hide()
 
 
 class TestDragCommit:
