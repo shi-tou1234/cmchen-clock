@@ -1,5 +1,11 @@
 # PROGRESS
 
+## 四轮：换屏/改分辨率自动纠偏（2026-09-23）
+- 需求：识别到显示器尺寸变化（外接屏与笔记本内置屏互换、改分辨率/缩放）后，自动切到合适的预设位置；此前换屏后时钟位置会偏移。
+- 实现：settings.py 新增 `pos_preset`（吸附的九宫格预设，""=自定义）与 `pos_anchor`（摆放时的屏幕可用区 {"x","y","w","h"}），均带回退校验，旧配置文件平滑升级；POSITION_PRESETS/POSITION_LABELS 迁到 settings.py（main 复导入）。main.py 新增纯函数 anchor_of / area_from_anchor / area_contains_window（按中心点判在屏内）/ nearest_preset（到九锚点距离取最近）；ClockWindow 监听 screenAdded/screenRemoved/primaryScreenChanged + 每块屏 geometryChanged/availableGeometryChanged + 窗口 ScreenChangeInternal，统一进 300ms 防抖 `_check_screen_fit`：可用区没变且窗口在屏内→不动不写盘，否则按原预设重摆、无预设按旧锚点反推最贴近的预设（锚点缺失且在屏内→不动，缺失且已跑出屏外→就近吸附边缘预设）。锚点在预设摆放、设置面板确定、拖动落点（脱离预设并立即保存）、退出保存处同步认领；启动时核对一次，覆盖「换屏后重启」场景。
+- 验收：90 passed（基线 67，新增 23：字段校验/锚点助手/九格精确反推/尺寸变化重摆/自定义反推/旧设置内外两种兜底/跨屏重启/防抖信号/拖动提交与原地点击不提交/面板预设绑定与手动回退）；selftest 三模式 SELFTEST_OK_*＋ICON_OK rc=0。
+- 收尾：README 同步（新特性条目、操作表、面板说明、测试数 90）；本文件记档；未提交（等领导示下）。
+
 ## 三轮：屏幕位置（2026-09-07）
 - 需求：九宫格预设位置（上方/中间/下方 × 靠左/居中/靠右）+ 自定义随意摆放，完成后提交 GitHub 并发 Release。
 - 实现：main.py 新增 POSITION_PRESETS/POSITION_LABELS 常量与 preset_point() 纯函数（锚点计算，边缘 24px，支持副屏负坐标）；右键/托盘菜单新增「屏幕位置」子菜单即时摆放并保存；设置面板新增「屏幕位置」预设下拉 + 精确 X/Y 坐标输入（确定后生效）；拖动自由摆放保持原样。

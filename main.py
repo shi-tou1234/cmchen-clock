@@ -14,12 +14,17 @@
 勾选「锁定位置」时禁止拖动；系统托盘常驻（显示/隐藏、显示方式、
 屏幕位置、锁定位置、设置、退出）。设置持久化到
 ~/.desktop-clock/settings.json（见 settings.py 的安全设计）。
+
+显示器适配：每次摆放都记下当时的屏幕可用区（pos_anchor）与吸附的预设
+（pos_preset）；屏幕插拔、分辨率/缩放或可用区变化（含窗口跨屏）时防抖
+触发 _check_screen_fit——先按原预设重摆，没有预设则按旧坐标推断最贴近的
+预设，从而自动回到合适位置，不再因换用笔记本内置屏/外接屏而偏移。
 """
 
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QEvent, QTime, Qt, QTimer
+from PySide6.QtCore import QDate, QEvent, QPoint, QRect, QTime, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,7 +51,12 @@ import autostart
 import fonts
 import settings as settings_mod
 from clock_core import format_date, format_time
-from settings import BEHAVIOR_LABELS, WINDOW_BEHAVIORS
+from settings import (
+    BEHAVIOR_LABELS,
+    POSITION_LABELS,
+    POSITION_PRESETS,
+    WINDOW_BEHAVIORS,
+)
 
 MSG_TITLE = "桌面时钟"
 
@@ -64,23 +74,8 @@ MODE_FLAGS = {
 
 POSITION_MARGIN = 24
 
-# 屏幕位置预设：上/中/下 × 左/中/右 九个锚点。
-POSITION_PRESETS = (
-    "top-left", "top-center", "top-right",
-    "middle-left", "middle-center", "middle-right",
-    "bottom-left", "bottom-center", "bottom-right",
-)
-POSITION_LABELS = {
-    "top-left": "上方靠左",
-    "top-center": "上方居中",
-    "top-right": "上方靠右",
-    "middle-left": "中间靠左",
-    "middle-center": "中间居中",
-    "middle-right": "中间靠右",
-    "bottom-left": "下方靠左",
-    "bottom-center": "下方居中",
-    "bottom-right": "下方靠右",
-}
+# 屏幕几何变化（改分辨率、插拔显示器、缩放调整）信号密集，防抖合并成一次处理
+SCREEN_FIT_DEBOUNCE_MS = 300
 
 
 def asset_path(name):
@@ -133,6 +128,36 @@ def preset_point(key, width, height, area):
     else:
         y = area.y() + (area.height() - height) // 2
     return x, y
+
+
+def anchor_of(area):
+    """QRect 可用区 → 可持久化的 dict（settings.pos_anchor 格式）。"""
+    return {"x": area.x(), "y": area.y(), "w": area.width(), "h": area.height()}
+
+
+def area_from_anchor(anchor):
+    """pos_anchor dict → QRect；None/键不齐返回 None（旧版设置无此键）。"""
+    if not isinstance(anchor, dict) or not all(k in anchor for k in ("x", "y", "w", "h")):
+        return None
+    return QRect(anchor["x"], anchor["y"], anchor["w"], anchor["h"])
+
+
+def area_contains_window(area, x, y, width, height):
+    """按窗口中心点判断是否在可用区内：半悬屏幕边缘不算跑偏，避免误搬。"""
+    cx, cy = x + width // 2, y + height // 2
+    return area.x() <= cx <= area.x() + area.width() and \
+        area.y() <= cy <= area.y() + area.height()
+
+
+def nearest_preset(width, height, x, y, area):
+    """当前位置最贴近的九宫格预设（到九个锚点的欧氏距离取最小）。"""
+    best, best_dist = "middle-center", None
+    for key in POSITION_PRESETS:
+        px, py = preset_point(key, width, height, area)
+        dist = (px - x) ** 2 + (py - y) ** 2
+        if best_dist is None or dist < best_dist:
+            best, best_dist = key, dist
+    return best
 
 
 class SettingsDialog(QDialog):
@@ -246,7 +271,13 @@ class SettingsDialog(QDialog):
         self.pos_y_spin = QSpinBox()
         self.pos_y_spin.setRange(-20000, 20000)
         self._load_position_spins()
+        # 先回显已存预设再接信号，避免初始化时用预设坐标覆盖当前坐标
+        self._syncing_preset = False
+        idx = self.pos_preset_combo.findData(self.cfg.get("pos_preset") or "")
+        self.pos_preset_combo.setCurrentIndex(max(0, idx))
         self.pos_preset_combo.currentIndexChanged.connect(self._apply_preset_to_spins)
+        self.pos_x_spin.valueChanged.connect(self._on_pos_spin_changed)
+        self.pos_y_spin.valueChanged.connect(self._on_pos_spin_changed)
 
         pos_row = QHBoxLayout()
         pos_row.addWidget(self.pos_x_spin)
@@ -341,6 +372,12 @@ class SettingsDialog(QDialog):
         self.pos_x_spin.setValue(x)
         self.pos_y_spin.setValue(y)
 
+    def _on_pos_spin_changed(self, value):
+        """手动改坐标即脱离预设；程序回填坐标时由 _syncing_preset 屏蔽。"""
+        if self._syncing_preset:
+            return
+        self.pos_preset_combo.setCurrentIndex(0)  # 「自定义」
+
     def _apply_preset_to_spins(self):
         """选中预设时按当前屏幕与时钟尺寸算出像素坐标，回填到 X/Y 输入框。"""
         key = self.pos_preset_combo.currentData()
@@ -353,8 +390,12 @@ class SettingsDialog(QDialog):
         else:
             width, height = 240, 120
         x, y = preset_point(key, width, height, self._target_area())
-        self.pos_x_spin.setValue(x)
-        self.pos_y_spin.setValue(y)
+        self._syncing_preset = True
+        try:
+            self.pos_x_spin.setValue(x)
+            self.pos_y_spin.setValue(y)
+        finally:
+            self._syncing_preset = False
 
     def apply(self):
         """把面板当前值写回 cfg 并返回。"""
@@ -369,6 +410,7 @@ class SettingsDialog(QDialog):
         self.cfg["opacity"] = self.opacity_slider.value() / 100
         self.cfg["pos_x"] = self.pos_x_spin.value()
         self.cfg["pos_y"] = self.pos_y_spin.value()
+        self.cfg["pos_preset"] = self.pos_preset_combo.currentData() or ""
         if not self._loaded_file_family:
             self.cfg["font_file"] = ""
         return self.cfg
@@ -381,7 +423,13 @@ class ClockWindow(QWidget):
         super().__init__()
         self.cfg = cfg
         self._drag_offset = None
+        self._drag_start = None
         self._quitting = False
+        # 屏幕几何变化防抖：改分辨率/插拔显示器会连发信号，合并成一次核对
+        self._screen_fit_timer = QTimer(self)
+        self._screen_fit_timer.setSingleShot(True)
+        self._screen_fit_timer.setInterval(SCREEN_FIT_DEBOUNCE_MS)
+        self._screen_fit_timer.timeout.connect(self._check_screen_fit)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, cfg["window_behavior"] == "desktop")
 
@@ -399,6 +447,10 @@ class ClockWindow(QWidget):
         self.tray = self._setup_tray() if enable_tray else None
         self._apply_settings()
         self._place_window()
+        self._setup_screen_watch()
+        # 启动核对一次：设置可能保存在另一块屏或另一分辨率下（换屏后重启也纠偏）；
+        # 之后 show 引起的换屏由 ScreenChangeInternal + 屏幕信号防抖接管
+        self._check_screen_fit()
         self._tick()
 
     # ---- 显示方式 / 设置应用 ----
@@ -449,9 +501,90 @@ class ClockWindow(QWidget):
         """把时钟挪到预设屏幕位置并立即保存（主动摆放，与锁定/桌面模式无关）。"""
         self.adjustSize()
         screen = self.screen() or QApplication.primaryScreen()
-        x, y = preset_point(key, self.width(), self.height(), screen.availableGeometry())
+        area = screen.availableGeometry()
+        x, y = preset_point(key, self.width(), self.height(), area)
         self.cfg["pos_x"], self.cfg["pos_y"] = x, y
+        self.cfg["pos_preset"] = key
+        self.cfg["pos_anchor"] = anchor_of(area)
         self.move(x, y)
+        settings_mod.save_settings(self.cfg)
+
+    # ---- 显示器尺寸/插拔变化侦测与自动纠偏 ----
+
+    def _setup_screen_watch(self):
+        """监听屏幕插拔与几何变化。
+
+        连接只发生两处且各一次：启动时遍历 app.screens()、之后 screenAdded
+        的新对象，天然无重复连接；连接随屏幕对象销毁自动断开。
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.screenAdded.connect(self._on_screen_added)
+        app.screenRemoved.connect(self._schedule_screen_fit)
+        app.primaryScreenChanged.connect(self._schedule_screen_fit)
+        for screen in app.screens():
+            self._watch_screen(screen)
+
+    def _on_screen_added(self, screen):
+        self._watch_screen(screen)
+        self._schedule_screen_fit()
+
+    def _watch_screen(self, screen):
+        screen.geometryChanged.connect(self._schedule_screen_fit)
+        screen.availableGeometryChanged.connect(self._schedule_screen_fit)
+
+    def _schedule_screen_fit(self, *args):
+        """防抖入口：信号可能连发（缩放调整/分辨率切换），300ms 静默后只核对一次。"""
+        self._screen_fit_timer.start()
+
+    def _target_screen(self):
+        """窗口中心所在的屏幕；不在任何屏内时取最近的屏幕，兜底主屏。"""
+        center = QPoint(self.x() + self.width() // 2, self.y() + self.height() // 2)
+        best, best_dist = None, None
+        for screen in QApplication.screens():
+            geo = screen.geometry()
+            if geo.contains(center):
+                return screen
+            dx = max(geo.x() - center.x(), 0, center.x() - geo.x() - geo.width() + 1)
+            dy = max(geo.y() - center.y(), 0, center.y() - geo.y() - geo.height() + 1)
+            dist = dx * dx + dy * dy
+            if best_dist is None or dist < best_dist:
+                best, best_dist = screen, dist
+        return best or QApplication.primaryScreen()
+
+    def _check_screen_fit(self):
+        """可用区变化（换屏/改分辨率/缩放）后重摆：按原预设，无预设则反推最贴近的预设。
+
+        旧锚点缺失（升级前的设置）且窗口仍在屏内时不动，避免无依据搬位置。
+        """
+        screen = self._target_screen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.adjustSize()
+        x, y, w, h = self.x(), self.y(), self.width(), self.height()
+        old_area = area_from_anchor(self.cfg.get("pos_anchor"))
+        if area_contains_window(area, x, y, w, h) and old_area in (None, area):
+            return
+        preset = self.cfg.get("pos_preset") or ""
+        if not preset:
+            # 自定义位置：拿旧可用区反推原意最贴近的预设；锚点缺失时按当前区兜底
+            preset = nearest_preset(w, h, x, y, old_area or area)
+        nx, ny = preset_point(preset, w, h, area)
+        self.move(nx, ny)
+        self.cfg["pos_x"], self.cfg["pos_y"] = nx, ny
+        self.cfg["pos_preset"] = preset
+        self.cfg["pos_anchor"] = anchor_of(area)
+        settings_mod.save_settings(self.cfg)
+
+    def _commit_drag(self):
+        """拖动落点即新的自定义位置：脱离预设、认领所在屏锚点并立即保存。"""
+        self.cfg["pos_x"], self.cfg["pos_y"] = self.x(), self.y()
+        self.cfg["pos_preset"] = ""
+        screen = self._target_screen()
+        if screen is not None:
+            self.cfg["pos_anchor"] = anchor_of(screen.availableGeometry())
         settings_mod.save_settings(self.cfg)
 
     def _toggle_lock(self):
@@ -477,13 +610,15 @@ class ClockWindow(QWidget):
     def _place_window(self):
         self.adjustSize()
         if self.cfg["pos_x"] is not None and self.cfg["pos_y"] is not None:
+            # 沿用已存坐标与它的原锚点，是否换屏交给 _check_screen_fit 判定
             self.move(self.cfg["pos_x"], self.cfg["pos_y"])
             return
-        screen = self.screen() or QApplication.primaryScreen()
-        area = screen.availableGeometry()
-        self.move(
-            area.x() + (area.width() - self.width()) // 2,
-            area.y() + (area.height() - self.height()) // 4)
+        area = (self._target_screen() or QApplication.primaryScreen()).availableGeometry()
+        x = area.x() + (area.width() - self.width()) // 2
+        y = area.y() + (area.height() - self.height()) // 4
+        self.move(x, y)
+        self.cfg["pos_x"], self.cfg["pos_y"] = x, y
+        self.cfg["pos_anchor"] = anchor_of(area)
 
     # ---- 每秒刷新（对齐整秒）----
 
@@ -497,6 +632,7 @@ class ClockWindow(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self._drag_allowed():
             self._drag_offset = event.globalPosition().toPoint() - self.pos()
+            self._drag_start = self.pos()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -505,10 +641,19 @@ class ClockWindow(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        moved = (self._drag_offset is not None
+                 and self._drag_start is not None
+                 and self.pos() != self._drag_start)
         self._drag_offset = None
+        self._drag_start = None
+        if moved:
+            self._commit_drag()
         super().mouseReleaseEvent(event)
 
     def event(self, ev):
+        if ev.type() == QEvent.ScreenChangeInternal:
+            # 窗口跨屏（含被系统挪到新主屏上）也纳入核对
+            self._schedule_screen_fit()
         # 双保险：desktop 模式万一被点击激活，立刻压回窗口栈底部
         if (ev.type() == QEvent.WindowActivate
                 and self.cfg["window_behavior"] == "desktop"):
@@ -594,7 +739,6 @@ class ClockWindow(QWidget):
         if result != QDialog.Accepted:
             return
         self.cfg = settings_mod.merged_settings(dialog.apply())
-        settings_mod.save_settings(self.cfg)
         autostart.sync(self.cfg["autostart"])
         pos = self.pos()
         was_visible = self.isVisible()
@@ -606,6 +750,13 @@ class ClockWindow(QWidget):
         else:
             self.move(pos)
         self.adjustSize()
+        # 坐标来自面板（预设或手输），按落点所在屏重新认领锚点；
+        # 落在所有屏之外则保留旧锚点，留给下一次屏幕核对纠正
+        screen = self._target_screen()
+        if screen is not None and area_contains_window(
+                screen.availableGeometry(), self.x(), self.y(), self.width(), self.height()):
+            self.cfg["pos_anchor"] = anchor_of(screen.availableGeometry())
+        settings_mod.save_settings(self.cfg)
 
     def _quit(self):
         self._quitting = True
@@ -615,6 +766,12 @@ class ClockWindow(QWidget):
     def _save_position(self):
         self.cfg["pos_x"] = self.x()
         self.cfg["pos_y"] = self.y()
+        # 窗口仍在这块可用区内才认领它的锚点；已跑偏则保留旧锚点，
+        # 让下次启动/屏幕变化时的 _check_screen_fit 还能纠正
+        screen = self._target_screen()
+        if screen is not None and area_contains_window(
+                screen.availableGeometry(), self.x(), self.y(), self.width(), self.height()):
+            self.cfg["pos_anchor"] = anchor_of(screen.availableGeometry())
         settings_mod.save_settings(self.cfg)
 
     def closeEvent(self, event):

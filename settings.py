@@ -17,6 +17,24 @@ BEHAVIOR_LABELS = {
     "desktop": "固定在桌面",
 }
 
+# 屏幕位置预设：上/中/下 × 左/中/右 九个锚点及其菜单/面板标签。
+POSITION_PRESETS = (
+    "top-left", "top-center", "top-right",
+    "middle-left", "middle-center", "middle-right",
+    "bottom-left", "bottom-center", "bottom-right",
+)
+POSITION_LABELS = {
+    "top-left": "上方靠左",
+    "top-center": "上方居中",
+    "top-right": "上方靠右",
+    "middle-left": "中间靠左",
+    "middle-center": "中间居中",
+    "middle-right": "中间靠右",
+    "bottom-left": "下方靠左",
+    "bottom-center": "下方居中",
+    "bottom-right": "下方靠右",
+}
+
 DEFAULTS = {
     "font_family": "",        # 空 = 用应用默认字体
     "font_file": "",          # 从字体文件加载的路径；非空且可加载时优先于 font_family
@@ -31,6 +49,8 @@ DEFAULTS = {
     "autostart": False,            # 开机自启动（登录后自动运行）
     "pos_x": None,
     "pos_y": None,
+    "pos_preset": "",              # 当前吸附的九宫格预设；"" = 自定义（拖动/手输坐标）
+    "pos_anchor": None,            # 摆放时的屏幕可用区 {"x","y","w","h"}，用于识别显示器尺寸变化
 }
 
 _FONT_SIZE_MIN, _FONT_SIZE_MAX = 8, 200
@@ -84,6 +104,28 @@ def _coerce_bool(value, default):
     return default
 
 
+def normalize_pos_preset(value, default=DEFAULTS["pos_preset"]):
+    """校验九宫格预设键；空串=自定义，非法值回退 default。"""
+    if isinstance(value, str) and (value == "" or value in POSITION_PRESETS):
+        return value
+    return default
+
+
+def _coerce_anchor(value):
+    """校验屏幕可用区锚点：4 个整数键齐全且宽高为正才接受，否则 None。"""
+    if not isinstance(value, dict):
+        return None
+    out = {}
+    for key in ("x", "y", "w", "h"):
+        num = _coerce_int(value.get(key), None)
+        if num is None:
+            return None
+        out[key] = num
+    if out["w"] <= 0 or out["h"] <= 0:
+        return None
+    return out
+
+
 def merged_settings(raw):
     """把任意来源的 dict 合并到缺省值上：缺字段补默认，类型不对回退默认。
 
@@ -112,6 +154,8 @@ def merged_settings(raw):
             result["opacity"] = float(opacity)
     for key in ("pos_x", "pos_y"):
         result[key] = _coerce_int(raw.get(key), None)
+    result["pos_preset"] = normalize_pos_preset(raw.get("pos_preset"))
+    result["pos_anchor"] = _coerce_anchor(raw.get("pos_anchor"))
     return result
 
 

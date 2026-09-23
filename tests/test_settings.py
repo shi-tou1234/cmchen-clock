@@ -1,6 +1,13 @@
 import json
 
-from settings import DEFAULTS, load_settings, normalize_color, save_settings, settings_path
+from settings import (
+    DEFAULTS,
+    load_settings,
+    normalize_color,
+    normalize_pos_preset,
+    save_settings,
+    settings_path,
+)
 
 
 class TestDefaults:
@@ -137,3 +144,46 @@ class TestPosLocked:
         assert load_settings(base=tmp_path)["pos_locked"] is True
         settings_path(base=tmp_path).write_text('{"pos_locked": "yes"}', encoding="utf-8")
         assert load_settings(base=tmp_path)["pos_locked"] is False
+
+
+class TestPosPreset:
+    def test_defaults_to_custom_without_anchor(self, tmp_path):
+        assert DEFAULTS["pos_preset"] == ""
+        assert DEFAULTS["pos_anchor"] is None
+        loaded = load_settings(base=tmp_path)
+        assert loaded["pos_preset"] == ""
+        assert loaded["pos_anchor"] is None
+
+    def test_valid_preset_kept(self, tmp_path):
+        save_settings({"pos_preset": "bottom-right"}, base=tmp_path)
+        assert load_settings(base=tmp_path)["pos_preset"] == "bottom-right"
+
+    def test_invalid_preset_falls_back_to_custom(self, tmp_path):
+        for bad in ("center", "TOP-LEFT", "topleft", None, 42, True):
+            save_settings({"pos_preset": bad}, base=tmp_path)
+            assert load_settings(base=tmp_path)["pos_preset"] == "", bad
+
+    def test_normalize_pos_preset_direct(self):
+        assert normalize_pos_preset("middle-center") == "middle-center"
+        assert normalize_pos_preset("") == ""
+        assert normalize_pos_preset("nope") == ""
+        assert normalize_pos_preset(None, default="top-left") == "top-left"
+
+
+class TestPosAnchor:
+    def test_valid_anchor_kept_including_negative_origin(self, tmp_path):
+        anchor = {"x": -2560, "y": 50, "w": 2560, "h": 1440}
+        save_settings({"pos_anchor": anchor}, base=tmp_path)
+        assert load_settings(base=tmp_path)["pos_anchor"] == anchor
+
+    def test_anchor_bad_shape_falls_back(self, tmp_path):
+        for bad in (
+            "0,0,1920,1080",            # 字符串不接受
+            [0, 0, 1920, 1080],         # 列表不接受
+            {"x": 0, "y": 0, "w": 1920},  # 缺 h
+            {"x": "a", "y": 0, "w": 1920, "h": 1080},  # 非整数
+            {"x": 0, "y": 0, "w": 1920, "h": 0},       # 宽高须为正
+            {"x": True, "y": 0, "w": 1920, "h": 1080},  # bool 不算整数
+        ):
+            save_settings({"pos_anchor": bad}, base=tmp_path)
+            assert load_settings(base=tmp_path)["pos_anchor"] is None, bad
