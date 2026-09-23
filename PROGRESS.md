@@ -1,5 +1,12 @@
 # PROGRESS
 
+## 五轮：同区换屏漏判修复（2026-09-23）
+- 需求：四轮发版后领导实测「电脑屏幕→外接显示器」仍会偏移（反方向正常），要修好并推送更新说明。
+- 根因：四轮的 `_check_screen_fit` 只对比「锚点（摆放时可用区）有没有变」——笔记本屏与外接屏可用区恰好都是 0,0,1920×1080 时对比失效；而换屏瞬间系统会挪窗、跨屏后 DPI 变化让窗口尺寸改变（靠下/居中等预设坐标依赖宽高），位置已偏离却判定「没变化」直接放行。反方向可用区有差异走了重摆路径，故表现正常。
+- 实现（三层防护）：①贴合度校验——有预设就按当前屏+当前尺寸重算应处坐标并逐像素比对，对不上即纠回（不再只信锚点）；②外部挪动侦测——`move()` 置位标记区分程序/系统挪窗，`moveEvent` 发现被系统挪动时自定义位置退回已保存意图并排定核对，`resizeEvent`（字号/DPI）、`showEvent` 同样排定；③纠偏自校验——每次真重摆后排 300ms 复核，最多 FIT_VERIFY_ROUNDS=3 轮等系统落定。另加 `fit_log()` 诊断日志（~/.desktop-clock/fit.log，记录触发源/各屏几何/判定结果，pytest 静默、每次启动清空）。
+- 验收：96 passed（+6：同区漏判回归/贴合不动不写盘/自校验链/系统挪窗退位与预设只排核对/resize 排核对；修一处测试细节——隐藏窗口 resize 不派发事件需先 show）；selftest 三模式 SELFTEST_OK_*＋ICON_OK rc=0；本机实测换屏方向已正常（领导确认「现在修好了」）。
+- 收尾：README 更新记录新增 v1.0.4/v1.0.3、特性条目补三层防护、FAQ 加换屏偏移条目、测试数 96；Release 说明模板加「本版更新内容」链接；提交推送 github.com/shi-tou1234/cmchen-clock（领导已授权），打 tag v1.0.4 触发三平台 Release；本地重建 dist/DesktopClock.exe 替换运行中版本。
+
 ## 四轮：换屏/改分辨率自动纠偏（2026-09-23）
 - 需求：识别到显示器尺寸变化（外接屏与笔记本内置屏互换、改分辨率/缩放）后，自动切到合适的预设位置；此前换屏后时钟位置会偏移。
 - 实现：settings.py 新增 `pos_preset`（吸附的九宫格预设，""=自定义）与 `pos_anchor`（摆放时的屏幕可用区 {"x","y","w","h"}），均带回退校验，旧配置文件平滑升级；POSITION_PRESETS/POSITION_LABELS 迁到 settings.py（main 复导入）。main.py 新增纯函数 anchor_of / area_from_anchor / area_contains_window（按中心点判在屏内）/ nearest_preset（到九锚点距离取最近）；ClockWindow 监听 screenAdded/screenRemoved/primaryScreenChanged + 每块屏 geometryChanged/availableGeometryChanged + 窗口 ScreenChangeInternal，统一进 300ms 防抖 `_check_screen_fit`：可用区没变且窗口在屏内→不动不写盘，否则按原预设重摆、无预设按旧锚点反推最贴近的预设（锚点缺失且在屏内→不动，缺失且已跑出屏外→就近吸附边缘预设）。锚点在预设摆放、设置面板确定、拖动落点（脱离预设并立即保存）、退出保存处同步认领；启动时核对一次，覆盖「换屏后重启」场景。

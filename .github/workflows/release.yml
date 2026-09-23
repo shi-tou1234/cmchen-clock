@@ -143,4 +143,5 @@ jobs:
             - **Windows**：未签名，SmartScreen 提示时选「仍要运行」即可；解压即用，双击 `DesktopClock-windows.exe`
             - **macOS 包未签名**：解压后把 `DesktopClock.app` 拖进「应用程序」，首次打开请右键 → 打开，或终端执行 `xattr -cr ~/Applications/DesktopClock.app`
             - **Linux**：`tar xzf DesktopClock-linux.tar.gz && chmod +x DesktopClock && ./DesktopClock`（单文件二进制，不是 AppImage，无需 libfuse2）
+            - **本版更新内容**见 [README 更新记录](https://github.com/${{ github.repository }}#更新记录)
             - 源码运行、构建与自定义图标方法见 [README](https://github.com/${{ github.repository }}#readme)
