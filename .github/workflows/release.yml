@@ -71,6 +71,15 @@ jobs:
           .venv/Scripts/pyinstaller.exe --onefile --windowed --name DesktopClock
           --icon assets/icon.ico --add-data "assets;assets" main.py
 
+      - name: Build (Windows uninstaller + setup)
+        if: matrix.target == 'windows'
+        shell: bash
+        # 顺序不能反：Setup.spec 会把 dist/DesktopClock.exe 与 dist/uninstall.exe
+        # 打进安装包 payload；卸载器用 tkinter，不为它多带一整套 Qt 运行时
+        run: >
+          .venv/Scripts/pyinstaller.exe --noconfirm Uninstall.spec
+          && .venv/Scripts/pyinstaller.exe --noconfirm Setup.spec
+
       - name: Build (macOS, .app bundle)
         if: matrix.target == 'macos'
         shell: bash
@@ -121,6 +130,14 @@ jobs:
           path: dist/DesktopClock-${{ matrix.target }}.*
           if-no-files-found: error
 
+      - name: Upload Windows installer artifact
+        if: matrix.target == 'windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-windows-installer
+          path: dist/DesktopClock-Setup.exe
+          if-no-files-found: error
+
   release:
     name: Publish Release
     needs: build
@@ -140,7 +157,8 @@ jobs:
           body: |
             桌面时钟安装包（Windows / macOS / Linux）。
 
-            - **Windows**：未签名，SmartScreen 提示时选「仍要运行」即可；解压即用，双击 `DesktopClock-windows.exe`
+            - **Windows 安装版（推荐）**：下载 `DesktopClock-Setup.exe` 双击安装——免管理员，自动创建桌面/开始菜单快捷方式，在系统「设置 → 应用 → 已安装的应用」里可见并可随时卸载。未签名，SmartScreen 提示时选「仍要运行」即可
+            - **Windows 单文件版**：下载 `DesktopClock-windows.exe` 解压即用（未签名；无快捷方式和卸载入口，删文件即卸载）
             - **macOS 包未签名**：解压后把 `DesktopClock.app` 拖进「应用程序」，首次打开请右键 → 打开，或终端执行 `xattr -cr ~/Applications/DesktopClock.app`
             - **Linux**：`tar xzf DesktopClock-linux.tar.gz && chmod +x DesktopClock && ./DesktopClock`（单文件二进制，不是 AppImage，无需 libfuse2）
             - **本版更新内容**见 [README 更新记录](https://github.com/${{ github.repository }}#更新记录)

@@ -23,6 +23,7 @@
 - **系统托盘常驻**：左键单击隐藏/唤回时钟，右键菜单可完成全部操作
 - **开机自启动**：设置面板或右键菜单勾选即可（Windows 写用户注册表 Run 键 / macOS LaunchAgents / Linux XDG Autostart，均为当前用户作用域，可随时取消）
 - **设置与窗口位置自动记住**（存于 `~/.desktop-clock/settings.json`，连同摆放时的屏幕可用区与预设，换屏后据此自动纠偏）
+- **Windows 安装版**：Release 提供 `DesktopClock-Setup.exe` 安装包——装到当前用户目录（免管理员），自动创建桌面/开始菜单快捷方式，在系统「已安装的应用」里可见并可随时卸载（见 [安装为正式软件](#安装为正式软件windows)）
 - 每秒整点对齐刷新，几乎不占 CPU；打包后单文件约 36 MB
 
 ## 使用方法
@@ -71,6 +72,20 @@ python main.py
 
 手动方式（备用）：Windows `Win+R` → `shell:startup` 放入快捷方式；macOS 系统设置 → 登录项；Linux 桌面环境自启动设置。
 
+## 安装为正式软件（Windows）
+
+Release 页面提供 `DesktopClock-Setup.exe` 安装包（约 90 MB，内含单文件时钟程序和卸载器）：
+
+- **双击安装**：图形向导四步（欢迎 → 选项 → 进度 → 完成），可选择安装位置、是否创建桌面/开始菜单快捷方式、是否装完即运行
+- **免管理员**：默认装到当前用户目录 `%LOCALAPPDATA%\Programs\DesktopClock`，不需要 UAC 提权
+- **桌面快捷方式**：安装后桌面出现「DesktopClock」图标，双击即启动
+- **系统软件列表**：安装后可在 **设置 → 应用 → 已安装的应用** 看到「DesktopClock 桌面时钟」（带版本号、发布者、占用体积）
+- **随时卸载**：在「已安装的应用」里点卸载，或直接运行安装目录里的 `uninstall.exe`。程序文件、快捷方式、注册表条目全部清干净；个人设置默认保留，卸载界面可勾选一并删除
+- **升级覆盖**：直接运行新版本安装包即可，自动覆盖旧文件，个人设置保留
+- **静默安装**（脚本/域部署用）：`DesktopClock-Setup.exe --silent [--dir <目录>] [--no-desktop] [--no-start-menu] [--run]`，日志写在 `%TEMP%\DesktopClock-Setup.log`
+
+不想安装也想用：直接下载 `DesktopClock-windows.exe` 单文件，解压即用（没有快捷方式和卸载入口，删文件即卸载）。
+
 ## 运行环境
 
 | 项目 | 要求 |
@@ -99,14 +114,18 @@ python -m venv .venv
 ## 打包发行
 
 ```bash
-# Windows（实测产出 dist/DesktopClock.exe，带应用图标）
-.venv\Scripts\pyinstaller.exe --onefile --windowed --name DesktopClock --icon assets/icon.ico --add-data "assets;assets" main.py
+# Windows 应用（产出 dist/DesktopClock.exe，带应用图标）
+.venv\Scripts\pyinstaller.exe --noconfirm DesktopClock.spec
+
+# Windows 卸载器 + 安装包（会内嵌前两步产物，顺序不能反）
+.venv\Scripts\pyinstaller.exe --noconfirm Uninstall.spec
+.venv\Scripts\pyinstaller.exe --noconfirm Setup.spec
 
 # macOS / Linux
 .venv/bin/pyinstaller --onefile --windowed --name DesktopClock --icon assets/icon.ico --add-data "assets:assets" main.py
 ```
 
-或直接使用脚本：`build.ps1`（Windows）、`build.sh`（macOS/Linux）。
+或直接使用脚本：`build.ps1`（Windows，一条命令出全部三个 exe）、`build.sh`（macOS/Linux）。
 
 ### Release 自动发布
 
@@ -114,11 +133,11 @@ python -m venv .venv
 
 - **打 tag 自动发布**：`git tag v1.0.0 && git push origin v1.0.0` → 自动在三个平台跑测试、构建、自检，并把安装包挂到 Releases 页
 - **手动验证构建**：Actions 页选「Desktop Release」→ Run workflow（只出构建产物，不发布）
-- 产物：`DesktopClock-windows.exe`、`DesktopClock-macos.zip`（未签名）、`DesktopClock-linux.tar.gz`
+- 产物：`DesktopClock-Setup.exe`（Windows 安装包）、`DesktopClock-windows.exe`（Windows 单文件）、`DesktopClock-macos.zip`（未签名）、`DesktopClock-linux.tar.gz`
 
 构建依赖见 `requirements.txt`（PySide6-Essentials / pyinstaller / pytest）。
 
-图标由 `scripts/gen_icon.py` 程序化生成（16/32/48/256 四尺寸，纯 Python 装配 ICO，无额外依赖），想换样式改脚本里的绘制参数后重跑即可。
+图标由 `scripts/gen_icon.py` 从 `assets/时钟图标.png` 生成（16/24/32/48/64/128 七尺寸 32bpp DIB + 256px PNG entry，纯 Python 装配 ICO，无额外依赖）。想换图标：替换 PNG 后重跑 `python scripts/gen_icon.py`，回读校验通过会输出 `ICO_OK`。
 
 ## 运行测试
 
@@ -127,7 +146,7 @@ python -m venv .venv
 .venv/bin/python -m pytest tests -q            # macOS / Linux
 ```
 
-96 条测试覆盖时间/日期格式化、设置迁移与安全读写、字体加载、三种显示方式窗口标志、拖动锁、屏幕位置九宫格与坐标持久化、换屏/改分辨率自动纠偏与预设反推、同可用区换屏漏判回归、系统挪窗侦测、拖动落点提交、开机自启动命令构造、设置面板预览等。
+136 条测试覆盖时间/日期格式化、设置迁移与安全读写、字体加载、三种显示方式窗口标志、拖动锁、屏幕位置九宫格与坐标持久化、换屏/改分辨率自动纠偏与预设反推、同可用区换屏漏判回归、系统挪窗侦测、拖动落点提交、开机自启动命令构造、设置面板预览、ICO 装配与回读、安装器路径推导/版本解析/安装清单/快捷方式创建与回读、install/uninstall 主流程（monkeypatch 沙箱，不碰真实系统）等。
 
 ## 自检
 
@@ -140,15 +159,21 @@ python main.py --selftest
 ## 项目结构
 
 ```
+app_version.py      应用版本号（安装器与 Release 共用的唯一来源）
 clock_core.py      时间/日期文本格式化（纯函数）
 settings.py        设置读写（JSON、缺省回退、旧配置迁移、防路径穿越）
 fonts.py           系统字体枚举、字体文件加载
 autostart.py       开机自启动（注册表 Run 键 / LaunchAgents / XDG Autostart）
 main.py            主程序（窗口、三显示方式、九宫格屏幕位置、换屏自动纠偏＋fit.log 诊断日志、托盘、设置面板、selftest）
-tests/             pytest 测试（96 条）
-scripts/gen_icon.py        图标生成（QPainter 绘制 + ICO 装配）
+installer_common.py 安装器共享逻辑（注册表卸载条目、快捷方式、安装清单、进程侦测，纯标准库）
+setup_app.py       Windows 安装向导（PySide6 四页向导 + --silent 静默安装）
+uninstall_app.py   Windows 卸载程序（tkinter 界面 + --silent 静默卸载）
+tests/             pytest 测试（136 条）
+scripts/gen_icon.py        图标生成（PNG → 多尺寸 ICO 装配）
 scripts/make_screenshot.py 生成 README 截图
+assets/时钟图标.png        图标源图
 assets/icon.ico    应用图标（多尺寸）
+DesktopClock.spec / Setup.spec / Uninstall.spec   PyInstaller 打包配置
 build.ps1 / build.sh       打包脚本
 ```
 
@@ -166,10 +191,19 @@ build.ps1 / build.sh       打包脚本
 **想恢复默认设置？**
 删除 `~/.desktop-clock/settings.json` 后重启程序。
 
+**怎么卸载？**
+用安装版：设置 → 应用 → 已安装的应用 →「DesktopClock 桌面时钟」→ 卸载；或运行安装目录里的 `uninstall.exe`。程序文件、快捷方式、注册表条目都会清干净，个人设置默认保留（卸载界面可勾选一并删除）。用的单文件版：直接删掉 exe 即可。
+
 **换屏（电脑屏幕 ↔ 外接显示器）后时钟偏移了？**
 v1.0.4 起会在 0.3 秒内自动纠回预设位置，无需手动处理；右键 → 屏幕位置 也可随时手动摆放。若换了新版仍发现偏移，把 `~/.desktop-clock/fit.log`（位置核对诊断日志，记录每次换屏的触发源、各屏幕几何与判定结果）发给维护者即可定位。
 
 ## 更新记录
+
+### v1.0.5（2026-09-26）
+
+- **新增 Windows 安装版**：Release 提供 `DesktopClock-Setup.exe` 安装包——PySide6 四页安装向导（位置/快捷方式选项/进度/完成），默认装到当前用户目录（免管理员），桌面与开始菜单自动创建快捷方式，系统「已安装的应用」列表可见（版本号/发布者/体积），随时可卸载；程序文件、快捷方式、注册表条目全部清干净，个人设置默认保留。附带 `--silent` 静默安装/卸载（可脚本化部署）。
+- **新图标**：应用图标改用 `assets/时钟图标.png` 源图生成（16/24/32/48/64/128 七尺寸 + 256 PNG entry），exe、快捷方式、安装包、卸载器统一使用。
+- 安装器为零第三方依赖的标准库实现（ctypes 直调 IShellLinkW 建快捷方式、winreg 写卸载条目、Toolhelp 侦测运行中进程），新增 40 条测试，总数 96 → 136。
 
 ### v1.0.4（2026-09-23）
 
