@@ -153,20 +153,20 @@ def _read_shortcut_target(lnk_path):
         persist = ctypes.c_void_p()
         hr = ic._com_call(link.value, 0,
                           [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
-                          ctypes.HRESULT,
+                          ctypes.c_long,
                           ctypes.byref(ic._guid(ic._IID_IPERSIST_FILE)),
                           ctypes.byref(persist))
         assert hr == 0
         try:
             hr = ic._com_call(persist.value, 5, [ctypes.c_wchar_p, ctypes.c_uint],
-                              ctypes.HRESULT, str(lnk_path), 0)  # IPersistFile::Load
+                              ctypes.c_long, str(lnk_path), 0)  # IPersistFile::Load
             assert hr == 0
         finally:
             ic._com_call(persist.value, 2, [], None)
         buffer = ctypes.create_unicode_buffer(1024)
         hr = ic._com_call(link.value, 3,
                           [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_void_p,
-                           ctypes.c_uint], ctypes.HRESULT, buffer, 1024, None, 0)
+                           ctypes.c_uint], ctypes.c_long, buffer, 1024, None, 0)
         assert hr == 0
         return buffer.value
     finally:

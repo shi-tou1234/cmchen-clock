@@ -76,7 +76,7 @@ def known_folder(guid_text):
     shell32.SHGetKnownFolderPath.argtypes = [
         ctypes.POINTER(_GUID), ctypes.c_ulong, ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_wchar_p)]
-    shell32.SHGetKnownFolderPath.restype = ctypes.HRESULT
+    shell32.SHGetKnownFolderPath.restype = ctypes.c_long
     guid = _guid(guid_text)
     ptr = ctypes.c_wchar_p()
     if shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(ptr)) != 0:
@@ -169,7 +169,7 @@ _VT_PERSIST_SAVE = 6
 _VT_RELEASE = 2
 
 
-def _com_call(ptr, index, argtypes, restype=ctypes.HRESULT, *args):
+def _com_call(ptr, index, argtypes, restype=ctypes.c_long, *args):
     """按 vtable 下标调用 COM 方法（ptr 为接口指针地址，WINFUNCTYPE=stdcall）。"""
     obj = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_void_p))
     vtbl = ctypes.cast(obj[0], ctypes.POINTER(ctypes.c_void_p))
@@ -182,7 +182,7 @@ def _ole32():
     ole32.CoCreateInstance.argtypes = [
         ctypes.POINTER(_GUID), ctypes.c_void_p, ctypes.c_ulong,
         ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)]
-    ole32.CoCreateInstance.restype = ctypes.HRESULT
+    ole32.CoCreateInstance.restype = ctypes.c_long
     ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
     return ole32
 
@@ -213,20 +213,20 @@ def create_shortcut(lnk_path, target, *, work_dir=None, icon=None,
              (str(icon or target), 0)),
         )
         for index, argtypes, values in plan:
-            hr = _com_call(link.value, index, argtypes, ctypes.HRESULT, *values)
+            hr = _com_call(link.value, index, argtypes, ctypes.c_long, *values)
             if hr != 0:
                 raise InstallError(f"设置快捷方式属性失败（vtable[{index}] {hr:#010x}）")
         persist = ctypes.c_void_p()
         hr = _com_call(link.value, 0,
                        [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
-                       ctypes.HRESULT,
+                       ctypes.c_long,
                        ctypes.byref(_guid(_IID_IPERSIST_FILE)),
                        ctypes.byref(persist))
         if hr != 0:
             raise InstallError(f"快捷方式保存组件不可用（{hr:#010x}）")
         try:
             hr = _com_call(persist.value, _VT_PERSIST_SAVE,
-                           [ctypes.c_wchar_p, ctypes.c_int], ctypes.HRESULT,
+                           [ctypes.c_wchar_p, ctypes.c_int], ctypes.c_long,
                            str(lnk_path), True)
             if hr != 0:
                 raise InstallError(f"保存快捷方式失败（{hr:#010x}）")
