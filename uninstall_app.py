@@ -142,19 +142,13 @@ class UninstallWindow:
         self.root.update_idletasks()
         try:
             result = ic.uninstall(
-                self.install_dir,
+                self._install_dir,
                 remove_settings=self.settings_var.get(),
                 progress=self._on_progress,
                 resolve_running=lambda: close_running_gui(self.root),
                 schedule_self=True)
-        except ic.AppRunningError as exc:
-            self._fail(str(exc))
-            return
-        except ic.InstallError as exc:
-            self._fail(str(exc))
-            return
-        except OSError as exc:
-            self._fail(f"卸载失败：{exc}")
+        except Exception as exc:  # 失败一律转成可读提示，不让窗口裸崩
+            self._fail(str(exc) or exc.__class__.__name__)
             return
         write_log(f"uninstall ok {result}")
         self.bar.config(value=100)

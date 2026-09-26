@@ -215,14 +215,8 @@ class ProgressPage(QWizardPage):
             result = ic.install(
                 options, progress=self._on_progress,
                 resolve_running=lambda: close_running_gui(self))
-        except ic.AppRunningError as exc:
-            self._fail(str(exc))
-            return
-        except ic.InstallError as exc:
-            self._fail(str(exc))
-            return
-        except OSError as exc:
-            self._fail(f"安装失败：{exc}")
+        except Exception as exc:  # 失败一律转成可读提示，不让向导裸崩
+            self._fail(str(exc) or exc.__class__.__name__)
             return
 
         self._state["result"] = result

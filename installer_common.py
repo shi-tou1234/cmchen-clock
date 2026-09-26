@@ -21,7 +21,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from ctypes import wintypes
 from pathlib import Path
 
 APP_ID = "DesktopClock"
@@ -75,7 +74,7 @@ def known_folder(guid_text):
         return None
     shell32 = ctypes.windll.shell32
     shell32.SHGetKnownFolderPath.argtypes = [
-        ctypes.POINTER(_GUID), wintypes.DWORD, wintypes.HANDLE,
+        ctypes.POINTER(_GUID), ctypes.c_ulong, ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_wchar_p)]
     shell32.SHGetKnownFolderPath.restype = ctypes.HRESULT
     guid = _guid(guid_text)
@@ -181,7 +180,7 @@ def _com_call(ptr, index, argtypes, restype=ctypes.HRESULT, *args):
 def _ole32():
     ole32 = ctypes.windll.ole32
     ole32.CoCreateInstance.argtypes = [
-        ctypes.POINTER(_GUID), ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(_GUID), ctypes.c_void_p, ctypes.c_ulong,
         ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)]
     ole32.CoCreateInstance.restype = ctypes.HRESULT
     ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
@@ -227,7 +226,7 @@ def create_shortcut(lnk_path, target, *, work_dir=None, icon=None,
             raise InstallError(f"快捷方式保存组件不可用（{hr:#010x}）")
         try:
             hr = _com_call(persist.value, _VT_PERSIST_SAVE,
-                           [ctypes.c_wchar_p, wintypes.BOOL], ctypes.HRESULT,
+                           [ctypes.c_wchar_p, ctypes.c_int], ctypes.HRESULT,
                            str(lnk_path), True)
             if hr != 0:
                 raise InstallError(f"保存快捷方式失败（{hr:#010x}）")
@@ -384,15 +383,15 @@ def estimated_size_kb(paths):
 
 class _PROCESSENTRY32(ctypes.Structure):
     _fields_ = [
-        ("dwSize", wintypes.DWORD),
-        ("cntUsage", wintypes.DWORD),
-        ("th32ProcessID", wintypes.DWORD),
+        ("dwSize", ctypes.c_ulong),
+        ("cntUsage", ctypes.c_ulong),
+        ("th32ProcessID", ctypes.c_ulong),
         ("th32DefaultHeapID", ctypes.c_void_p),
-        ("th32ModuleID", wintypes.DWORD),
-        ("cntThreads", wintypes.DWORD),
-        ("th32ParentProcessID", wintypes.DWORD),
+        ("th32ModuleID", ctypes.c_ulong),
+        ("cntThreads", ctypes.c_ulong),
+        ("th32ParentProcessID", ctypes.c_ulong),
         ("pcPriClassBase", ctypes.c_long),
-        ("dwFlags", wintypes.DWORD),
+        ("dwFlags", ctypes.c_ulong),
         ("szExeFile", ctypes.c_char * 260),
     ]
 
@@ -401,15 +400,15 @@ def app_pids():
     """运行中的时钟进程 id 列表（按可执行文件名匹配）。"""
     _require_windows()
     kernel32 = ctypes.windll.kernel32
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
     kernel32.Process32First.argtypes = [
-        wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32)]
-    kernel32.Process32First.restype = wintypes.BOOL
+        ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32)]
+    kernel32.Process32First.restype = ctypes.c_int
     kernel32.Process32Next.argtypes = [
-        wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32)]
-    kernel32.Process32Next.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32)]
+    kernel32.Process32Next.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
     if not snapshot or snapshot == 0xFFFFFFFFFFFFFFFF:
@@ -433,24 +432,24 @@ def _top_level_windows(pids):
     """属于指定进程的顶层窗口句柄（含隐藏窗口：时钟隐藏到托盘时仍是顶层窗口）。"""
     _require_windows()
     user32 = ctypes.windll.user32
-    user32.EnumWindows.argtypes = [ctypes.c_void_p, wintypes.LPARAM]
-    user32.EnumWindows.restype = wintypes.BOOL
+    user32.EnumWindows.argtypes = [ctypes.c_void_p, ctypes.c_ssize_t]
+    user32.EnumWindows.restype = ctypes.c_int
     user32.GetWindowThreadProcessId.argtypes = [
-        wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
 
     targets = set(pids)
     found = []
 
     def callback(hwnd, _lparam):
-        pid = wintypes.DWORD()
+        pid = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value in targets:
             found.append(hwnd)
         return True
 
-    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
-                                   wintypes.LPARAM)(callback)
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p,
+                                   ctypes.c_ssize_t)(callback)
     user32.EnumWindows(enum_proc, 0)
     return found
 
@@ -462,10 +461,10 @@ def request_app_close(pids, timeout=5.0):
     _require_windows()
     user32 = ctypes.windll.user32
     user32.PostMessageW.argtypes = [
-        wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-    user32.PostMessageW.restype = wintypes.BOOL
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_ssize_t]
+    user32.PostMessageW.restype = ctypes.c_int
     for hwnd in _top_level_windows(pids):
-        user32.PostMessageW(hwnd, WM_CLOSE, None, None)
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not app_pids():
@@ -480,13 +479,13 @@ def terminate_pids(pids):
         return
     _require_windows()
     kernel32 = ctypes.windll.kernel32
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel32.TerminateProcess.restype = wintypes.BOOL
-    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    kernel32.TerminateProcess.restype = ctypes.c_int
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     for pid in pids:
         handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
         if not handle:
